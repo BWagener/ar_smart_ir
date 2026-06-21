@@ -73,37 +73,109 @@ def _get_broadlink_wrapper(hass: HomeAssistant, entity_id: str):
     return wrapper
 
 
+def _get_linknlink_wrapper(hass: HomeAssistant, entity_id: str):
+    """
+    Return the LinknLinkCoordinator for the given remote entity.
+
+    LinkNLink hubs run the `linknlink-local` integration, which is a structural
+    fork of Broadlink. Its hass.data layout is slightly different:
+
+      hass.data["linknlink"]          -> dict[config_entry_id, LinknLinkCoordinator]
+
+    The coordinator exposes the same call surface the learn loop needs:
+      .async_request(api_method)      -> coroutine that handles auth/retry
+      .api                            -> raw linknlink device object
+        .enter_learning               -> method to pass to async_request
+        .check_data                   -> method to pass to async_request
+
+    So once resolved, the coordinator can be used exactly like a
+    BroadlinkDevice wrapper.
+    """
+    data = hass.data.get("linknlink")
+    if not data:
+        _LOGGER.debug("AR Smart IR: 'linknlink' not in hass.data")
+        return None
+
+    # The official core `linknlink` integration mirrors Broadlink: hass.data[DOMAIN]
+    # is a data object exposing a `.devices` dict keyed by config_entry_id. Some
+    # community "LinknLink Local" builds instead store a plain dict directly.
+    # Support both, and never let an unexpected layout raise — degrade to None so
+    # the caller surfaces a clean "device not found" message instead of a crash.
+    devices = getattr(data, "devices", data)
+    if not isinstance(devices, dict):
+        _LOGGER.debug(
+            "AR Smart IR: unexpected 'linknlink' hass.data layout (%s); "
+            "cannot locate a learn device.",
+            type(devices).__name__,
+        )
+        return None
+
+    entity_reg = er.async_get(hass)
+    entity_entry = entity_reg.async_get(entity_id)
+    if entity_entry is None:
+        _LOGGER.debug("AR Smart IR: entity '%s' not found in registry", entity_id)
+        return None
+
+    coordinator = devices.get(entity_entry.config_entry_id)
+    if coordinator is None:
+        _LOGGER.debug(
+            "AR Smart IR: no LinkNLink device for config entry '%s'",
+            entity_entry.config_entry_id,
+        )
+    return coordinator
+
+
+def _resolve_learn_device(hass: HomeAssistant, entity_id: str):
+    """
+    Find a learn-capable device wrapper for a remote entity, trying Broadlink
+    first and then LinkNLink. Returns (wrapper, kind) or (None, None).
+
+    Both wrappers share the .async_request(api_method) + .api.enter_learning /
+    .api.check_data surface, so the caller can treat them identically.
+    """
+    wrapper = _get_broadlink_wrapper(hass, entity_id)
+    if wrapper is not None:
+        return wrapper, "Broadlink"
+
+    wrapper = _get_linknlink_wrapper(hass, entity_id)
+    if wrapper is not None:
+        return wrapper, "LinkNLink"
+
+    return None, None
+
+
 async def _async_broadlink_learn(
     hass: HomeAssistant,
     remote_entity: str,
     timeout: int,
 ) -> str:
     """
-    Put a Broadlink remote into IR learn mode and return the captured
-    code as a Base64 string.
+    Put a Broadlink *or* LinkNLink remote into IR learn mode and return the
+    captured code as a Base64 string.
 
-    Uses HA's BroadlinkDevice wrapper (which owns async_request) together
-    with the raw python-broadlink api object (which owns enter_learning /
-    check_data).  The two must be kept separate.
+    Both integrations expose a wrapper that owns async_request together with a
+    raw device api object that owns enter_learning / check_data. LinkNLink is a
+    Broadlink protocol clone, so the captured base64 is interchangeable.
     """
-    wrapper = _get_broadlink_wrapper(hass, remote_entity)
+    wrapper, kind = _resolve_learn_device(hass, remote_entity)
     if wrapper is None:
         raise HomeAssistantError(
-            f"AR Smart IR: Could not find a Broadlink device for entity "
-            f"'{remote_entity}'. Make sure it is a Broadlink remote entity "
-            "and the Broadlink integration is loaded."
+            f"AR Smart IR: Could not find a Broadlink or LinkNLink device for "
+            f"entity '{remote_entity}'. Make sure it is a Broadlink or LinkNLink "
+            "remote entity and that integration is loaded."
         )
 
     api = getattr(wrapper, "api", None)
     if api is None:
         raise HomeAssistantError(
-            f"AR Smart IR: BroadlinkDevice for '{remote_entity}' has no .api — "
-            "the Broadlink integration may not have finished setting up."
+            f"AR Smart IR: {kind} device for '{remote_entity}' has no .api — "
+            "the integration may not have finished setting up."
         )
 
     _LOGGER.debug(
-        "AR Smart IR: Entering IR learn mode on %s (timeout %ss)",
+        "AR Smart IR: Entering IR learn mode on %s (%s, timeout %ss)",
         remote_entity,
+        kind,
         timeout,
     )
 
@@ -133,7 +205,7 @@ async def _async_broadlink_learn(
 
     raise HomeAssistantError(
         f"AR Smart IR: Timed out after {timeout}s — no IR signal received on "
-        f"'{remote_entity}'. Point your physical remote directly at the Broadlink "
+        f"'{remote_entity}'. Point your physical remote directly at the {kind} "
         "device and press the button firmly, then try again."
     )
 

@@ -33,7 +33,7 @@
       },
       "name": {
         "title": "Entity details",
-        "description": "Finish setting up your SmartIR device.\n\nFor Zigbee2MQTT IR remotes, use the `/set` topic such as `zigbee2mqtt/Salon_IR/set`.\n\nTest status: {status}",
+        "description": "Finish setting up your SmartIR device.\n\nFor MQTT and UFO-R11 (Moes/Tuya ZS06) IR blasters via Zigbee2MQTT, enter the `/set` topic such as `zigbee2mqtt/ufo_r11/set`.\n\nTest status: {status}",
         "data": {
           "name": "Name",
           "controller_data": "Controller data / service name",
@@ -51,7 +51,7 @@
     "step": {
       "init": {
         "title": "SmartIR options",
-        "description": "Update the UI-configured SmartIR entity, adjust repeat timing, or build a multi-step sequence for a selected command.\n\nFor Zigbee2MQTT IR remotes, use the `/set` topic such as `zigbee2mqtt/Salon_IR/set`.",
+        "description": "Update the UI-configured SmartIR entity, adjust repeat timing, or build a multi-step sequence for a selected command.\n\nFor MQTT and UFO-R11 (Moes/Tuya ZS06) IR blasters via Zigbee2MQTT, enter the `/set` topic such as `zigbee2mqtt/ufo_r11/set`.",
         "data": {
           "name": "Name",
           "controller_data": "Controller data / service name",
@@ -69,7 +69,7 @@
           "override_sequence_step_4": "Sequence step 4",
           "override_sequence_step_5": "Sequence step 5",
           "override_remove": "Remove selected override",
-          "learn_command": "Open IR learn wizard (Broadlink only)"
+          "learn_command": "Open IR learn wizard (Broadlink / LinkNLink)"
         }
       },
       "learn": {
@@ -77,7 +77,7 @@
         "description": "{status}",
         "data": {
           "override_command": "Command to learn / replace",
-          "learn_broadlink_entity": "Broadlink remote entity",
+          "learn_broadlink_entity": "Broadlink / LinkNLink remote entity",
           "learn_timeout": "Timeout (seconds)",
           "go_back": "Go back to options"
         }
@@ -86,6 +86,6 @@
   },
   "error": {
     "test_failed": "The test command could not be sent. Check the controller selection and controller data.",
-    "learn_failed": "IR learning failed. Check the Broadlink entity and try again."
+    "learn_failed": "IR learning failed. Check the Broadlink/LinkNLink remote entity and try again."
   }
 }

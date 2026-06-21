@@ -55,11 +55,13 @@ from .controller import get_controller
 
 CONTROLLERS = [
     "Broadlink",
+    "LinkNLink",
     "Xiaomi",
     "MQTT",
     "LOOKin",
     "ESPHome",
     "Tuya",
+    "UFOR11",
 ]
 
 TEST_COMMAND_PRIORITIES = (
@@ -72,7 +74,7 @@ TEST_COMMAND_PRIORITIES = (
 )
 
 
-RAW_BASED_CONTROLLERS = {"Xiaomi", "MQTT", "LOOKin", "ESPHome", "Tuya"}
+RAW_BASED_CONTROLLERS = {"Xiaomi", "MQTT", "LOOKin", "ESPHome", "Tuya", "UFOR11"}
 
 
 def _temperature_sensor_selector():
@@ -118,7 +120,7 @@ def _optional_entity_field(config_key: str, data: dict[str, Any]):
 def _controller_data_field(controller: str):
     if controller == "ESPHome":
         return str
-    if controller in ["Broadlink", "Xiaomi", "Tuya"]:
+    if controller in ["Broadlink", "LinkNLink", "Xiaomi", "Tuya"]:
         return selector.EntitySelector(
             selector.EntitySelectorConfig(domain="remote")
         )
@@ -138,9 +140,15 @@ def _build_compatibility_message(
     device_controller: str,
     command_encoding: str,
 ) -> str:
+    # Broadlink and LinkNLink share the exact same base64 wire format, so a
+    # code authored for one needs no adaptation for the other.
+    broadlink_family = {"Broadlink", "LinkNLink"}
+    if selected_controller in broadlink_family and device_controller in broadlink_family:
+        return "No test sent yet."
+
     if (
         selected_controller in RAW_BASED_CONTROLLERS
-        and device_controller == "Broadlink"
+        and device_controller in broadlink_family
         and command_encoding in {"Base64", "Hex", "Pronto"}
     ):
         return (
@@ -705,9 +713,9 @@ class ARSmartIROptionsFlow(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders={
                 "status": self._learn_status or (
-                    "Select a command, choose your Broadlink remote entity, then "
-                    "click Learn. When prompted, point your physical remote at the "
-                    "Broadlink device and press the button you want to capture."
+                    "Select a command, choose your Broadlink or LinkNLink remote "
+                    "entity, then click Learn. When prompted, point your physical "
+                    "remote at the hub and press the button you want to capture."
                 ),
             },
         )
@@ -832,10 +840,11 @@ class ARSmartIROptionsFlow(config_entries.OptionsFlow):
         data: dict[str, Any],
     ) -> dict[Any, Any]:
         """Schema for the learn step form."""
-        # Pre-fill the Broadlink entity from the device's controller_data if
-        # the controller is Broadlink, so the user doesn't have to type it.
+        # Pre-fill the remote entity from the device's controller_data if the
+        # controller is Broadlink or LinkNLink (both expose a learn-capable
+        # remote entity), so the user doesn't have to type it.
         default_broadlink = ""
-        if data.get(CONF_CONTROLLER) == "Broadlink":
+        if data.get(CONF_CONTROLLER) in ("Broadlink", "LinkNLink"):
             default_broadlink = data.get(CONF_CONTROLLER_DATA, "")
 
         schema: dict[Any, Any] = {

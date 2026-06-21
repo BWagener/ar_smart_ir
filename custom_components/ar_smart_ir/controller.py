@@ -55,11 +55,13 @@ _LOGGER = logging.getLogger(__name__)
 # ── controller / encoding tags ──────────────────────────────────────────────
 
 BROADLINK_CONTROLLER = "Broadlink"
+LINKNLINK_CONTROLLER = "LinkNLink"
 XIAOMI_CONTROLLER = "Xiaomi"
 MQTT_CONTROLLER = "MQTT"
 LOOKIN_CONTROLLER = "LOOKin"
 ESPHOME_CONTROLLER = "ESPHome"
 TUYA_CONTROLLER = "Tuya"
+UFOR11_CONTROLLER = "UFOR11"
 
 ENC_BASE64 = "Base64"
 ENC_HEX = "Hex"
@@ -72,11 +74,13 @@ ENC_TUYA = "Tuya"
 ALL_ENCODINGS = [ENC_BASE64, ENC_HEX, ENC_PRONTO, ENC_RAW, ENC_TUYA]
 
 BROADLINK_COMMANDS_ENCODING = ALL_ENCODINGS
+LINKNLINK_COMMANDS_ENCODING = ALL_ENCODINGS
 XIAOMI_COMMANDS_ENCODING = ALL_ENCODINGS
 MQTT_COMMANDS_ENCODING = ALL_ENCODINGS
 LOOKIN_COMMANDS_ENCODING = ALL_ENCODINGS
 ESPHOME_COMMANDS_ENCODING = ALL_ENCODINGS
 TUYA_COMMANDS_ENCODING = ALL_ENCODINGS
+UFOR11_COMMANDS_ENCODING = ALL_ENCODINGS
 
 # Default IR carrier frequency (Hz). Can be overridden per-controller via
 # controller_data when the user knows their device uses something different.
@@ -90,11 +94,13 @@ def get_controller(hass, controller, encoding, controller_data, delay):
     """Return a controller compatible with the specification provided."""
     controllers = {
         BROADLINK_CONTROLLER: BroadlinkController,
+        LINKNLINK_CONTROLLER: LinkNLinkController,
         XIAOMI_CONTROLLER: XiaomiController,
         MQTT_CONTROLLER: MQTTController,
         LOOKIN_CONTROLLER: LookinController,
         ESPHOME_CONTROLLER: ESPHomeController,
         TUYA_CONTROLLER: TuyaController,
+        UFOR11_CONTROLLER: UFOR11Controller,
     }
 
     try:
@@ -432,6 +438,25 @@ class BroadlinkController(AbstractController):
             )
 
         await self._run_sequence(command, send_step)
+
+
+# ── LinkNLink ───────────────────────────────────────────────────────────────
+#
+# LinkNLink hubs (eRemote, eHub, etc.) running the `linknlink-local` HA
+# integration speak the Broadlink protocol: the integration exposes a standard
+# `remote` entity whose send_command accepts `b64:<base64>` codes, and the
+# base64 payload is the exact same Broadlink wire format. So the controller is
+# byte-for-byte identical to Broadlink on the send side — it only differs in
+# the controller name shown in the UI and (in __init__.py) in how the learn
+# wizard reaches the device's API. Keeping it as its own class means the two
+# can diverge later without touching Broadlink.
+
+class LinkNLinkController(BroadlinkController):
+    def check_encoding(self, encoding):
+        if encoding not in LINKNLINK_COMMANDS_ENCODING:
+            raise Exception(
+                "The encoding is not supported by the LinkNLink controller."
+            )
 
 
 # ── Xiaomi (miio) ───────────────────────────────────────────────────────────
@@ -833,5 +858,115 @@ class TuyaController(AbstractController):
                 await self.hass.services.async_call(
                     "remote", "send_command", service_data
                 )
+
+        await self._run_sequence(command, send_step)
+
+
+# ── UFO-R11 ─────────────────────────────────────────────────────────────────
+#
+# Moes / Tuya UFO-R11 (a.k.a. ZS06) Zigbee IR blaster exposed through
+# Zigbee2MQTT — the same device the litinoveweedle SmartIR fork added a
+# dedicated controller for.
+#
+# Z2M presents the blaster's "send IR" function as a writable property called
+# `ir_code_to_send`. To transmit, publish:
+#
+#     topic:    zigbee2mqtt/<friendly_name>/set
+#     payload:  {"ir_code_to_send": "<tuya-base64>"}
+#
+# This is functionally a specialisation of the generic MQTT controller, but
+# exposing it as its own controller type means:
+#   * it shows up explicitly in the config-flow controller list, and
+#   * it doesn't depend on the topic happening to end in "/set" for the
+#     payload shape to be picked correctly (the MQTT controller's heuristic).
+#
+# controller_data accepts either:
+#
+#   1. A plain topic string:
+#         "zigbee2mqtt/ufo_r11/set"
+#
+#   2. A JSON blob for finer control:
+#         {"topic": "zigbee2mqtt/ufo_r11/set",
+#          "payload_key": "ir_code_to_send",   # default
+#          "qos": 0,
+#          "retain": false,
+#          "passthrough": false}               # true = send code verbatim
+#
+# Device-code files learnt *on the UFO-R11 itself* should declare
+#   "commandsEncoding": "Tuya"
+# so their codes pass through untouched. Codes authored for other blasters
+# (Broadlink / Pronto / Raw / Hex) are transcoded to the Tuya FastLZ Base64
+# the UFO-R11 expects, using the same codec the Tuya/MQTT paths use.
+
+class UFOR11Controller(AbstractController):
+    def check_encoding(self, encoding):
+        if encoding not in UFOR11_COMMANDS_ENCODING:
+            raise Exception(
+                "The encoding is not supported by the UFO-R11 controller."
+            )
+
+    def _get_ufor11_target(self):
+        """Return (topic, payload_key, qos, retain, passthrough)."""
+        topic = self._controller_data
+        payload_key = "ir_code_to_send"
+        qos: int = 0
+        retain: bool = False
+        passthrough: bool = False
+
+        if isinstance(self._controller_data, str):
+            data = self._controller_data.strip()
+            if data.startswith("{"):
+                try:
+                    cfg = json.loads(data)
+                except json.JSONDecodeError:
+                    cfg = None
+                if isinstance(cfg, dict):
+                    topic = cfg.get("topic", topic)
+                    payload_key = (
+                        cfg.get("payload_key")
+                        or cfg.get("payloadProperty")
+                        or payload_key
+                    )
+                    qos = int(cfg.get("qos", 0))
+                    retain = bool(cfg.get("retain", False))
+                    passthrough = bool(cfg.get("passthrough", False))
+
+        if not isinstance(topic, str) or not topic.strip():
+            raise Exception(
+                "UFO-R11 controller data must include a valid MQTT topic, "
+                "e.g. 'zigbee2mqtt/ufo_r11/set'."
+            )
+
+        return topic.strip(), payload_key, qos, retain, passthrough
+
+    async def send(self, command):
+        topic, payload_key, qos, retain, passthrough = self._get_ufor11_target()
+
+        async def send_step(step):
+            code, repeat_count, repeat_delay_secs = self._get_command_spec(step)
+
+            if passthrough:
+                # Trust the JSON code as-is; assume it is already a valid
+                # ir_code_to_send string.
+                wire_value = code if isinstance(code, str) else json.dumps(code)
+            else:
+                # Native Tuya codes pass straight through _to_tuya_b64; any
+                # other source encoding is transcoded to Tuya FastLZ Base64.
+                wire_value = self._normalize_command(code, ENC_TUYA)
+
+            payload = json.dumps({payload_key: wire_value})
+            service_data = {
+                "topic": topic,
+                "payload": payload,
+                "qos": qos,
+                "retain": retain,
+            }
+
+            async def publish_once():
+                await self.hass.services.async_call("mqtt", "publish", service_data)
+
+            await self._repeat_with_delay(
+                publish_once, repeat_count, repeat_delay_secs
+            )
 
         await self._run_sequence(command, send_step)
