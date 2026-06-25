@@ -19,6 +19,7 @@ from .const import (
     CONF_DEVICE_CODE,
     CONF_GO_BACK,
     CONF_HUMIDITY_SENSOR,
+    CONF_INFRARED_ENTITY,
     CONF_OVERRIDE_COMMAND,
     CONF_OVERRIDE_REMOVE,
     CONF_OVERRIDE_REPEAT_COUNT,
@@ -120,6 +121,19 @@ def _entity_selector():
     )
 
 
+def _infrared_entity_selector():
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            filter=[
+                {
+                    "domain": "infrared",
+                }
+            ],
+            multiple=False,
+        )
+    )
+
+
 def _optional_entity_field(config_key: str, data: dict[str, Any]):
     if data.get(config_key):
         return vol.Optional(config_key, default=data.get(config_key))
@@ -129,15 +143,24 @@ def _optional_entity_field(config_key: str, data: dict[str, Any]):
 def _controller_data_field(controller: str):
     if controller == "ESPHome":
         return str
-    if controller == "Infrared":
-        return selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="infrared")
-        )
     if controller in ["Broadlink", "LinkNLink", "Xiaomi", "Tuya"]:
         return selector.EntitySelector(
             selector.EntitySelectorConfig(domain="remote")
         )
     return str
+
+
+def _normalize_controller_target(data: dict[str, Any]) -> None:
+    if data.get(CONF_CONTROLLER) == "Infrared":
+        infrared_entity = data.get(CONF_INFRARED_ENTITY) or data.get(CONF_CONTROLLER_DATA)
+        data[CONF_INFRARED_ENTITY] = infrared_entity
+        data[CONF_CONTROLLER_DATA] = infrared_entity
+
+
+def _controller_target_error_key(controller: str) -> str:
+    if controller == "Infrared":
+        return CONF_INFRARED_ENTITY
+    return CONF_CONTROLLER_DATA
 
 
 def _source_names_default(value: Any) -> str:
@@ -285,8 +308,6 @@ class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             current_values.update(user_input)
 
-        controller_field = _controller_data_field(controller)
-
         data_schema: dict[Any, Any] = {
             vol.Required(
                 CONF_NAME,
@@ -294,15 +315,28 @@ class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ): str,
         }
 
-        if CONF_CONTROLLER_DATA in current_values:
+        if controller == "Infrared":
+            infrared_default = (
+                current_values.get(CONF_INFRARED_ENTITY)
+                or current_values.get(CONF_CONTROLLER_DATA)
+            )
             data_schema[
                 vol.Optional(
-                    CONF_CONTROLLER_DATA,
-                    default=current_values[CONF_CONTROLLER_DATA],
+                    CONF_INFRARED_ENTITY,
+                    default=infrared_default or "",
                 )
-            ] = controller_field
+            ] = _infrared_entity_selector()
         else:
-            data_schema[vol.Optional(CONF_CONTROLLER_DATA)] = controller_field
+            controller_field = _controller_data_field(controller)
+            if CONF_CONTROLLER_DATA in current_values:
+                data_schema[
+                    vol.Optional(
+                        CONF_CONTROLLER_DATA,
+                        default=current_values[CONF_CONTROLLER_DATA],
+                    )
+                ] = controller_field
+            else:
+                data_schema[vol.Optional(CONF_CONTROLLER_DATA)] = controller_field
 
         if platform == "climate":
             data_schema[
@@ -505,14 +539,16 @@ class ARSmartIRConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data[CONF_DELAY] = float(data.get(CONF_DELAY, DEFAULT_DELAY))
 
             data["controller"] = controller
+            _normalize_controller_target(data)
 
             if user_input.get(CONF_GO_BACK):
                 return await self.async_step_controller()
 
             if not data.get(CONF_CONTROLLER_DATA):
+                error_key = _controller_target_error_key(controller)
                 return await self._async_show_name_form(
                     user_input,
-                    errors={CONF_CONTROLLER_DATA: "required"},
+                    errors={error_key: "required"},
                 )
 
             if user_input.get(CONF_TEST_DEVICE):
@@ -609,6 +645,49 @@ class ARSmartIROptionsFlow(config_entries.OptionsFlow):
                 self._pending_override_command = selected_key
                 return await self.async_step_learn()
 
+            if user_input.get(CONF_CONTROLLER) != data.get(CONF_CONTROLLER):
+                updated_data = {**data, **user_input}
+                updated_data[CONF_CONTROLLER_DATA] = ""
+                updated_data.pop(CONF_INFRARED_ENTITY, None)
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=vol.Schema(
+                        self._build_options_schema(
+                            updated_data,
+                            command_options,
+                            selected_key,
+                            current_repeat,
+                            current_delay,
+                            current_remove,
+                        )
+                    ),
+                    errors=errors,
+                )
+
+            cleaned_input = dict(user_input)
+            _normalize_controller_target(cleaned_input)
+
+            if not cleaned_input.get(CONF_CONTROLLER_DATA):
+                error_key = _controller_target_error_key(
+                    cleaned_input.get(CONF_CONTROLLER, "")
+                )
+                errors[error_key] = "required"
+                updated_data = {**data, **cleaned_input}
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=vol.Schema(
+                        self._build_options_schema(
+                            updated_data,
+                            command_options,
+                            selected_key,
+                            current_repeat,
+                            current_delay,
+                            current_remove,
+                        )
+                    ),
+                    errors=errors,
+                )
+
             if selected_path:
                 remove_override = bool(user_input.get(CONF_OVERRIDE_REMOVE, False))
                 repeat_count = int(user_input.get(CONF_OVERRIDE_REPEAT_COUNT, 1) or 1)
@@ -630,7 +709,6 @@ class ARSmartIROptionsFlow(config_entries.OptionsFlow):
                         repeat_delay,
                     )
 
-            cleaned_input = dict(user_input)
             cleaned_input[CONF_COMMAND_OVERRIDES] = override_data
             cleaned_input[CONF_OVERRIDE_COMMAND] = selected_key
             cleaned_input.pop(CONF_LEARN_COMMAND, None)
@@ -767,13 +845,24 @@ class ARSmartIROptionsFlow(config_entries.OptionsFlow):
         }
 
         controller = data.get(CONF_CONTROLLER, CONTROLLERS[0])
-        controller_field = _controller_data_field(controller)
-        schema[
-            vol.Optional(
-                CONF_CONTROLLER_DATA,
-                default=data.get(CONF_CONTROLLER_DATA, ""),
-            )
-        ] = controller_field
+        if controller == "Infrared":
+            schema[
+                vol.Optional(
+                    CONF_INFRARED_ENTITY,
+                    default=(
+                        data.get(CONF_INFRARED_ENTITY)
+                        or data.get(CONF_CONTROLLER_DATA, "")
+                    ),
+                )
+            ] = _infrared_entity_selector()
+        else:
+            controller_field = _controller_data_field(controller)
+            schema[
+                vol.Optional(
+                    CONF_CONTROLLER_DATA,
+                    default=data.get(CONF_CONTROLLER_DATA, ""),
+                )
+            ] = controller_field
 
         if data.get(CONF_PLATFORM) == "climate":
             schema[

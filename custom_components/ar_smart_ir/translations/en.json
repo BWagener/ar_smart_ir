@@ -36,7 +36,8 @@
         "description": "Finish setting up your SmartIR device.\n\nFor MQTT and UFO-R11 (Moes/Tuya ZS06) IR blasters via Zigbee2MQTT, enter the `/set` topic such as `zigbee2mqtt/ufo_r11/set`. For Infrared, choose an existing Home Assistant `infrared.*` emitter entity.\n\nTest status: {status}",
         "data": {
           "name": "Name",
-          "controller_data": "Controller data / emitter entity",
+          "controller_data": "Controller data / service name",
+          "infrared_entity": "Infrared emitter",
           "delay": "Delay between commands",
           "temperature_sensor": "Temperature sensor",
           "humidity_sensor": "Humidity sensor",
@@ -54,7 +55,8 @@
         "description": "Update the UI-configured SmartIR entity, adjust repeat timing, or build a multi-step sequence for a selected command.\n\nFor MQTT and UFO-R11 (Moes/Tuya ZS06) IR blasters via Zigbee2MQTT, enter the `/set` topic such as `zigbee2mqtt/ufo_r11/set`. For Infrared, choose an existing Home Assistant `infrared.*` emitter entity. Native infrared receiver learning is not supported here yet.",
         "data": {
           "name": "Name",
-          "controller_data": "Controller data / emitter entity",
+          "controller_data": "Controller data / service name",
+          "infrared_entity": "Infrared emitter",
           "delay": "Delay between commands",
           "temperature_sensor": "Temperature sensor",
           "humidity_sensor": "Humidity sensor",
