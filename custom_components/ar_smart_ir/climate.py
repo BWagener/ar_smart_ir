@@ -226,6 +226,14 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         return self._max_temperature
 
     @property
+    def precision(self):
+        return self._precision
+
+    @property
+    def target_temperature_step(self):
+        return self._precision
+
+    @property
     def fan_modes(self):
         return self._fan_modes
 
