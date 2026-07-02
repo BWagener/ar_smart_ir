@@ -32,6 +32,7 @@ CONF_POWER_SENSOR = "power_sensor"
 
 DEFAULT_DELAY = 0.5
 SPEED_OFF = "off"
+POWER_ON_SPEED_LAST = "last_speed"
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -84,14 +85,19 @@ class SmartIRFan(FanEntity, RestoreEntity):
         self._commands = device_data["commands"]
 
         # --- toggle / cycle remote support ----------------------------------
-        # A toggle/cycle remote has no discrete codes: power is a single
-        # toggle button, speed is a single button that cycles through the
-        # ordered speed list, and oscillate is a toggle. Enable it with
-        # "toggleMode": true in the device file. Required command keys are
-        # "power" and "speed_cycle"; "oscillate" is optional.
+        # A toggle remote has no discrete codes: power is a single toggle
+        # button, speed can be controlled by a single cycle/up button
+        # ("speed_cycle" or "speed_up"), optionally paired with "speed_down",
+        # and oscillate is a toggle. Enable it with "toggleMode": true.
+        # Required command keys are "power" and one of
+        # {"speed_cycle", "speed_up"}; "speed_down" and "oscillate" are
+        # optional. "powerOnSpeed" may be a speed label or "last_speed".
         self._toggle_mode = bool(device_data.get("toggleMode", False))
         self._power_on_speed = device_data.get("powerOnSpeed")
-        if self._power_on_speed not in self._speed_list:
+        if (
+            self._power_on_speed != POWER_ON_SPEED_LAST
+            and self._power_on_speed not in self._speed_list
+        ):
             self._power_on_speed = (
                 self._speed_list[0] if self._speed_list else None
             )
@@ -256,7 +262,7 @@ class SmartIRFan(FanEntity, RestoreEntity):
 
         self.async_write_ha_state()
 
-    async def async_turn_on(self, percentage=None, **kwargs):
+    async def async_turn_on(self, percentage=None, preset_mode=None, **kwargs):
 
         if percentage is None:
             percentage = ordered_list_item_to_percentage(
@@ -271,24 +277,28 @@ class SmartIRFan(FanEntity, RestoreEntity):
         await self.async_set_percentage(0)
 
     async def _toggle_set_percentage(self, percentage: int):
-        """Drive a toggle/cycle remote to an absolute speed.
+        """Drive a toggle remote to an absolute speed.
 
         - percentage 0 -> send the power toggle if we believe it's on.
         - otherwise -> power on if off (fan lands on powerOnSpeed), then fire
-          the speed-cycle code (target - current) mod N times to reach the
-          requested level. Going past the top wraps back to the bottom, which
-          matches how the physical cycle button behaves.
+          speed commands to reach the requested level.
+        - when only speed_cycle/speed_up exists, moving to a lower level wraps
+          by cycling up through the list (legacy behavior).
+        - when speed_down exists, moves downward use that code directly.
         """
         async with self._temp_lock:
             self._on_by_remote = False
 
             power_code = self._commands.get("power")
-            cycle_code = self._commands.get("speed_cycle")
+            speed_up_code = self._commands.get("speed_up") or self._commands.get(
+                "speed_cycle"
+            )
+            speed_down_code = self._commands.get("speed_down")
 
-            if power_code is None or cycle_code is None:
+            if power_code is None or speed_up_code is None:
                 _LOGGER.error(
-                    "ar_smart_ir fan toggleMode requires 'power' and "
-                    "'speed_cycle' commands in the device file"
+                    "ar_smart_ir fan toggleMode requires 'power' and one of "
+                    "{'speed_cycle', 'speed_up'} commands in the device file"
                 )
                 return
 
@@ -311,26 +321,50 @@ class SmartIRFan(FanEntity, RestoreEntity):
             )
             target_index = self._speed_list.index(target)
 
-            # --- power on from off -> lands on the configured power-on speed
-            if self._speed == SPEED_OFF:
+            state_obj = self.hass.states.get(self.entity_id)
+            state_is_off = state_obj is not None and state_obj.state == STATE_OFF
+
+            # --- power on from off -> configured speed or remembered last speed
+            if self._speed == SPEED_OFF or state_is_off:
                 try:
                     await self._controller.send(power_code)
                 except Exception as e:
                     _LOGGER.exception(e)
                     return
-                if self._power_on_speed in self._speed_list:
-                    current_index = self._speed_list.index(self._power_on_speed)
+
+                if (
+                    self._power_on_speed == POWER_ON_SPEED_LAST
+                    and self._last_on_speed in self._speed_list
+                ):
+                    assumed_on_speed = self._last_on_speed
+                elif self._power_on_speed in self._speed_list:
+                    assumed_on_speed = self._power_on_speed
                 else:
-                    current_index = 0
+                    assumed_on_speed = self._speed_list[0]
+
+                current_index = self._speed_list.index(assumed_on_speed)
                 await asyncio.sleep(self._delay)
             else:
-                current_index = self._speed_list.index(self._speed)
+                if self._speed in self._speed_list:
+                    current_index = self._speed_list.index(self._speed)
+                else:
+                    current_index = 0
 
-            # --- cycle to the target level ----------------------------------
-            presses = (target_index - current_index) % count
+            # --- step to the target level -----------------------------------
+            if target_index > current_index:
+                presses = target_index - current_index
+                step_code = speed_up_code
+            elif target_index < current_index and speed_down_code is not None:
+                presses = current_index - target_index
+                step_code = speed_down_code
+            else:
+                # Legacy single-cycle remotes: wrap through the top.
+                presses = (target_index - current_index) % count
+                step_code = speed_up_code
+
             for i in range(presses):
                 try:
-                    await self._controller.send(cycle_code)
+                    await self._controller.send(step_code)
                 except Exception as e:
                     _LOGGER.exception(e)
                     break
