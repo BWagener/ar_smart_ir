@@ -1,0 +1,30 @@
+{
+  "manufacturer": "Meaco",
+  "supportedModels": [
+    "1056p"
+  ],
+  "supportedController": "UFOR11",
+  "commandsEncoding": "Tuya",
+  "toggleMode": true,
+  "powerOnSpeed": "last_speed",
+  "speed": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "11",
+    "12"
+  ],
+  "commands": {
+    "power": "BbgjxxE7AuATAQG0BuAVA+ADJ+APC8AP4A8LB3icuCP/CDsC",
+    "speed_up": "CggkxBFAAkICQAJDIANAB+ABAwBBYBMBtAbgFQNAO0AHwD/AE0APAETgAhvAL+AHU0BnB2KcCCT6CEEC",
+    "speed_down": "BRokyBFDAuANAQBEYAUBrQbgFQPgDyPAReADC+ADXeADJwdbnBok8ghDAg==",
+    "oscillate": "BWwk1BE5AuATAQHSBuAVA0AB4AMj4AcBQBvgAwFAD+ADA0ABD4+cbCQNCTkC//9sJA0JOQI="
+  }
+}

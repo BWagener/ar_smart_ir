@@ -17,6 +17,8 @@ ESPHome / Tuya automatically — so one imported file works on every controller.
   `helpers.Helper.compact_nec_hex_to_lirc` encoder.
 - `irdb_import.py` — fetches the irdb index + code sets from
   `raw.githubusercontent.com` and writes JSON files in the native schema.
+- `tuya_merge.py` — median-merges repeated Tuya captures into one robust code,
+  and prints equivalent **Tuya Base64**, **Raw timings JSON**, and **Pronto hex**.
 
 ## Usage
 
@@ -31,6 +33,12 @@ python3 tools/irdb_import.py --device-type TV \
 
 # Preview without writing:
 python3 tools/irdb_import.py --device-type TV --dry-run
+
+# Merge many learned Tuya captures from a scratch file:
+python3 tools/tuya_merge.py --input-file /path/to/captures.json
+
+# Or pass captures directly:
+python3 tools/tuya_merge.py --code "<capture1>" --code "<capture2>" --code "<capture3>"
 ```
 
 Other irdb device types you can pass to `--device-type`: `TV`, `DVD`,
